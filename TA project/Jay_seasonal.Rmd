@@ -1,0 +1,252 @@
+---
+title: "Seasonal and Nonseasonal GARCH Time Series Analysis"
+author: "Jaykumar Patel"
+output: html_document
+--- 
+
+### Department of Mathematical Sciences, Stevens Institute of Technology, Hoboken, NJ
+
+### Project Supervisor: Dr. Hadi Safari Katesari
+
+## PART A: SEASONAL DATASET: perrin freres monthly champagne sales data 
+
+**Introduction and Motivation**
+
+The motivation for analyzing this dataset is to gain insights into the trends, seasonality, and other patterns in champagne sales over time. This information can be useful for Perrin Freres to forecast future sales, make informed business decisions, and identify areas for improvement in their sales strategies.
+
+In addition, analyzing this dataset can provide valuable insights for other businesses in the food and beverage industry that rely on seasonal sales patterns. By understanding the trends and seasonality in sales, businesses can make better decisions regarding inventory management, pricing strategies, and marketing campaigns.
+
+Overall, the Perrin Freres monthly champagne sales dataset presents an interesting and challenging time series analysis project that can provide valuable insights for businesses and researchers alike.
+
+**Data Description**
+
+**Date Range**: From Jan 1964 to sept 1972
+
+**Datasource Description**: The data is from Kaggle website and can be accessed using the link: https://www.kaggle.com/datasets/anupamshah/perrin-freres-monthly-champagne-sales.
+
+**Dataset Description**: The dataset contains 105 entries, 2 total columns. One is date and another is sales.
+
+```{r}
+library(TSA)
+data <- read.csv("perrin-freres-monthly-champagne.csv")
+```
+
+```{r}
+summary(data)
+```
+
+**Checking seasonality**
+
+```{r}
+library(seastests)
+isSeasonal(data$sales, test = "combined", freq = 12)
+```
+
+**Data Pre-processing**
+
+Before any further preprocessing we want to remove the null values.
+  
+```{r}
+data_clean <- na.omit(data)
+plot(data_clean$sales, type='l')
+```
+
+**Decomposing the time series**
+
+Decomposing the time series to have a look at the seasonal components, trend components, and residuals in it.
+
+```{r}
+ts_sales = ts(log(data_clean$sales), frequency = 12)
+decompose_sales = decompose(ts_sales, "multiplicative")
+plot(decompose_sales, type='l',lwd=2, col = 'red')
+```
+
+The series exhibits multiplicative decomposition. As the amplitude of both the seasonal and irregular variations increase as the level of the trend rises. In the multiplicative model, the original time series is expressed as the product of trend, seasonal and irregular components.
+
+**Stationarity check**
+
+Let's start by checking if the time series is stationary or not. To do so we are going to use the Dickey Fuller and/or augmented Dickey fuller test
+
+```{r}
+library(aTSA)
+adf.test(data_clean$sales)
+```
+
+The augmented Dickey Fuller test demonstrates that the P values are not less than.05. Therefore, the series is not stationary, and the null hypothesis must be rejected. In other words, the variance is not constant over time and the time series has some sort of time dependent structure.
+
+Before fitting a model to the series, it is crucial to make it stationary because we only ever see one instance of a stochastic process, as opposed to many instances. So, in order for watching a lengthy run of a stochastic process to be comparable to observing numerous independent runs of a stochastic process, stationarity and ergodicity are required.
+
+**Plotting the ACF and PCF of the series.**
+
+```{r}
+acf(data_clean$sales)
+pacf(data_clean$sales)
+```
+
+The data's autocorrelation plot shows relatively little deterioration. This supports the finding that the time series is not stationary from the Dickey-Fuller test. A strong autocorrelation is apparent from the trend in the Data, which is visible.
+
+**MAKING THE TIME SERIES STATIONARY**
+
+**Using the Box Cox transformation:**
+
+A parameter lambda is used to index the Box-Cox transformation family of power transformations. Anytime we have a non-stationary time series (with non-constant variance), we can utilize this transformation. When Box-Cox is used with a specific lambda value, the process could become stationary.
+
+```{r}
+library(MASS)
+library(forecast)
+b <- boxcox(lm(data_clean$sales ~ 1))
+lambda <- b$x[which.max(b$y)]
+lambda
+new_data <- (data_clean$sales ^ lambda - 1) / lambda
+acf(new_data)
+pacf(new_data)
+adf.test(new_data)
+```
+
+We can observe that the series is still moving even after the Box Cox change. The series is not stationary since the P value is bigger than 0.5. Additionally, the acf and pacf plots demonstrate that the time series still exhibits autocorrelation. Let's do a seasonal differentiation of the time series to eliminate this association and make the series stationary.
+
+**SEASONAL DIFFERENCING**
+
+```{r}
+diff_ser <- diff(new_data)
+adf.test(diff(new_data,lag = 12))
+acf(diff(new_data))
+pacf(diff(new_data))
+eacf(diff(new_data))
+```
+
+After comparing the series, we can observe that the P value from the enhanced Dickey-Fuller test is less than 0.05, which indicates that it is statistically significant. As a result, we can say that the series is stationary at this point.Additionally, we can see that the correlations have greatly decreased in the ACF and PCF lots.
+
+Now that we have a stationary series, we'll have a look at the EACF plots to finalize the order of our AR, MA models and then fit the model.
+
+**DETERMINING THE ORDER OF THE MODEL**
+
+The best model to fit the data can have p, q, P, and Q in the range of 0 to 3, according to the ACF, PACF, and EACF. Based on the lowest AIC for P, Q, p, and q values, we will choose the best model. 
+
+I've created a nested for loop that goes through each conceivable combination of P, Q, p, and q values in the range of 0 to 3 and fits a SARIMA model for each of them. The AICs for each of these models are then listed along with the matching P, Q, p, and q values. The top value in the list is then popped once the list has been sorted in ascending order. The P, Q, p, and q values that correspond to the lowest AIC model are represented by this value. 
+
+**NESTED FOR LOOP FOR DERTMING THE VALUES OF P, Q, p and q**
+
+```{r}
+# Load the forecast package
+library(forecast)
+
+# Define the range of values for p, q, P, and Q
+p_values <- c(0, 1, 3)
+q_values <- c(0, 1, 3)
+P_values <- c(0, 1, 3)
+Q_values <- c(0, 1, 3)
+
+# Initialize variables for storing the best model and its performance
+best_model <- NULL
+best_aic <- Inf
+
+# Nested for loops to iterate over different parameter values
+for (p in p_values) {
+  for (q in q_values) {
+    for (P in P_values) {
+      for (Q in Q_values) {
+        
+        # Fit a seasonal ARIMA model with the current parameter values
+        fit <- arima(data_clean$sales, order=c(p,1,q), seasonal=c(P,1,Q), method="ML")
+        
+        # Evaluate the model performance using AIC
+        current_aic <- AIC(fit)
+        
+        # Update the best model and its performance if the current model is better
+        if (current_aic < best_aic) {
+          best_model <- fit
+          best_aic <- current_aic
+          best_params <- c(p, q, P, Q)
+        }
+      }
+    }
+  }
+}
+
+# Print the best SARIMA model parameters and AIC
+print(paste("Best SARIMA model parameters:", paste(best_params, collapse=",")))
+print(paste("Best AIC:", best_aic))
+```
+
+**Parameter Estimation using best model**
+
+```{r}
+(fit <- arima(data_clean$sales, order = c(3,1,3)))
+(fit2 <- arima(data_clean$sales, order = c(3,1,5)))
+```
+
+As per the aic I got the best model (3,1,3) but due to showing dependancies in Ljung-box test I decided to go with Arima(3,1,5) which is suggested by eacf and it works better.
+
+```{r}
+# Load the "forecast" package
+library(forecast)
+
+# Fit an ARIMA model to the "sales" dataset
+arima_model <- Arima(data_clean$sales, order = c(3,1,5))
+
+# Make a seasonal ARIMA (SARIMA) model from the ARIMA model
+sarima_model <- Arima(data_clean$sales, order = c(3,1,5), seasonal = list(order = c(1,1,3), period = 12))
+# Print the model summaries
+summary(arima_model)
+summary(sarima_model)
+```
+These summaries provide information about the model coefficients, standard errors, and other statistics. By examining these summaries, we can assess the goodness of fit of the models and evaluate their forecasting performance.
+
+**Residual Analysis**
+
+```{r}
+# Load the "forecast" package
+library(forecast)
+library(ggplot2)
+library(car)
+
+# Fit an ARIMA(3,1,3) model to the time series
+arima_model <- Arima(data_clean$sales, order = c(3,1,5))
+
+# Extract the residuals from the ARIMA model
+residuals <- residuals(arima_model)
+
+# Plot the ACF and PACF of the residuals
+acf(residuals)
+pacf(residuals)
+
+#plot time series data
+ts.plot(residuals,lwd=3,col="red",main='Residual Analysis')
+qqnorm(residuals)
+qqline(residuals)
+ggplot(data.frame(residuals = residuals), aes(x = 1:length(residuals), y = residuals)) +
+  geom_line() +
+  labs(x = "Observation", y = "Residuals", title = "Residuals Plot")
+
+# Plot the histogram and density of the residuals
+hist(residuals)
+plot(density(residuals))
+
+# Perform a Ljung-Box test on the residuals
+Box.test(residuals, lag = 10, type = "Ljung-Box")
+#LBQPlot(residuals, lag.max = 20, SquaredQ = FALSE)
+tsdiag(arima_model)
+```
+
+the code performs a Ljung-Box test on the residuals using the "Box.test" function to formally test for residual autocorrelation. The test statistic is compared to a chi-squared distribution with degrees of freedom equal to the number of lags specified in the test. A significant p-value (i.e., less than 0.05) indicates evidence of residual autocorrelation, which suggests that the model may be misspecified and may require further modification.
+
+In this case, I got a p-value more than 0.05 in the Ljung-Box test. It suggests that this can be a good model.
+
+**Forecast Using the best model**
+
+```{r}
+# Load the "forecast" package
+library(forecast)
+
+# Fit a SARIMA(3,1,3)(1,1,3) model to the time series
+sarima_model <- Arima(data_clean$sales, order = c(3,1,5), seasonal = list(order = c(1,1,3), period = 12))
+
+# Generate a 12-month forecast from the SARIMA model
+forecast_data <- forecast(sarima_model, h =12)
+
+# Plot the forecasted values
+plot(forecast_data)
+```
+
+Forecast looks preety much good and now I am moving on non-seasonal dataset.

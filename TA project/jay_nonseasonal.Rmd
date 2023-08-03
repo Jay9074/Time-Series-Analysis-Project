@@ -1,0 +1,321 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## PART B: NON-SEASONAL DATASET: Robinhood stocks data
+
+**Data Description**
+
+**Date Range**: From july 2021 to August 2022
+
+**Datasource Description**: The data is from Kaggle website and can be accessed using the link: https://www.kaggle.com/datasets/evangower/robinhood-stock-data.
+
+**Dataset Description** : This contains the historical stock price of Robinhood (ticker symbol HOOD) an American financial services company headquartered in Menlo Park, California, that facilitates commission-free trades of stocks, exchange-traded funds and cryptocurrencies via a mobile app introduced in March 2015.
+
+The company went public on the Nasdaq on July 29, 2021, under the stock ticker HOOD. The opening price was $38, but dropped shortly afterwards to a low of $33.35 before starting to recover, reaching an all time high at $85. Subsequently, it fell sharply again after facing growing regulatory uncertainty, plunging on Q3 earnings and disclosing that a security breach affected 7 million customers.
+
+```{r}
+library(TSA)
+data <- read.csv("HOOD.csv")
+summary(data)
+```
+
+**Data Pre-processing**
+
+```{r}
+data_clean <- na.omit(data)
+```
+
+**Checking seasonality**
+
+```{r}
+library(seastests)
+isSeasonal(data_clean$close_last, test = "combined", freq = 12)
+```
+Result of this test shows that the dataset is non-seasonal so we can go ahead with different tests.
+
+```{r}
+plot(data_clean$close_last, type='l')
+```
+
+**Plotting the ACF and PCF of the series.**
+
+**Stationarity check.**
+
+```{r}
+acf(data_clean$close_last)
+pacf(data_clean$close_last)
+library(aTSA)
+adf.test(data_clean$close_last)
+```
+
+The augmented Dickey Fuller test demonstrates that the P values are not less than.05. Therefore, the series is not stationary, and the null hypothesis must be rejected. In other words, the variance is not constant over time and the time series has some sort of time dependent structure.
+
+The data's autocorrelation plot shows relatively little deterioration. This supports the finding that the time series is not stationary from the Dickey-Fuller test. A strong autocorrelation is apparent from the trend in the Data, which is visible.
+
+**MAKING THE TIME SERIES STATIONARY**
+
+**Using the Box Cox transformation**
+
+```{r}
+library(MASS)
+library(forecast)
+b <- boxcox(lm(data_clean$close_last ~ 1))
+lambda <- b$x[which.max(b$y)]
+lambda
+new_data <- (data_clean$close_last ^ lambda - 1) / lambda
+acf(new_data)
+pacf(new_data)
+adf.test(new_data)
+```
+
+We can observe that the series is still moving even after the Box Cox change. The series is not stationary since the P value is bigger than 0.5. Additionally, the acf and pacf plots demonstrate that the time series still exhibits autocorrelation. Let's do a seasonal differentiation of the time series to eliminate this association and make the series stationary.
+
+**SEASONAL DIFFERENCING**
+
+```{r}
+diff_ser <- diff(new_data)
+adf.test(diff(new_data,lag = 12))
+acf(diff(new_data))
+pacf(diff(new_data))
+eacf(diff(new_data))
+```
+
+After comparing the series, we can observe that the P value from the enhanced Dickey-Fuller test is less than 0.05, which indicates that it is statistically significant. As a result, we can say that the series is stationary at this point.Additionally, we can see that the correlations have greatly decreased in the ACF and PCF lots.
+
+Now that we have a stationary series, we'll have a look at the EACF plots to finalize the order of our AR, MA models and then fit the model.
+
+**DETERMINING THE ORDER OF THE MODEL**
+
+The best model to fit the data can have p, q, P, and Q in the range of 0 to 2, according to the ACF, PACF, and EACF. Based on the lowest AIC for P, Q, p, and q values, we will choose the best model. 
+
+I've created a nested for loop that goes through each conceivable combination of P, Q, p, and q values in the range of 0 to 2 and fits a SARIMA model for each of them. The AICs for each of these models are then listed along with the matching P, Q, p, and q values. The top value in the list is then popped once the list has been sorted in ascending order. The P, Q, p, and q values that correspond to the lowest AIC model are represented by this value. 
+
+**NESTED FOR LOOP FOR DERTMING THE VALUES OF P, Q, p and q**
+
+```{r}
+# Load the forecast package
+library(forecast)
+
+# Define the range of values for p, q, P, and Q
+p_values <- c(0, 1, 2)
+q_values <- c(0, 1, 2)
+P_values <- c(0, 1, 2)
+Q_values <- c(0, 1, 2)
+
+# Initialize variables for storing the best model and its performance
+best_model <- NULL
+best_aic <- Inf
+
+# Nested for loops to iterate over different parameter values
+for (p in p_values) {
+  for (q in q_values) {
+    for (P in P_values) {
+      for (Q in Q_values) {
+        
+        # Fit a seasonal ARIMA model with the current parameter values
+        fit <- arima(data_clean$close_last, order=c(p,1,q), seasonal=c(P,1,Q), method="ML")
+        
+        # Evaluate the model performance using AIC
+        current_aic <- AIC(fit)
+        
+        # Update the best model and its performance if the current model is better
+        if (current_aic < best_aic) {
+          best_model <- fit
+          best_aic <- current_aic
+          best_params <- c(p, q, P, Q)
+        }
+      }
+    }
+  }
+}
+
+# Print the best SARIMA model parameters and AIC
+print(paste("Best SARIMA model parameters:", paste(best_params, collapse=",")))
+print(paste("Best AIC:", best_aic))
+```
+
+**Parameter Estimation using best model**
+
+```{r}
+# Load the "forecast" package
+library(forecast)
+
+# Fit an ARIMA model to the "Hood stocks" dataset
+arima_model <- Arima(data_clean$close_last, order = c(0,1,2))
+
+# Make a seasonal ARIMA (SARIMA) model from the ARIMA model
+sarima_model <- Arima(data_clean$close_last, order = c(0,1,2), seasonal = list(order = c(1,1,1), period = 12))
+# Print the model summaries
+summary(arima_model)
+summary(sarima_model)
+```
+
+These summaries provide information about the model coefficients, standard errors, and other statistics. By examining these summaries, we can assess the goodness of fit of the models and evaluate their forecasting performance.
+
+**Residual Analysis** 
+
+```{r}
+# Load the "forecast" package
+library(forecast)
+library(ggplot2)
+library(car)
+#library(Fit)
+
+# Fit an ARIMA(0,1,2) model to the time series
+arima_model <- Arima(data_clean$close_last, order = c(0,1,2))
+
+# Extract the residuals from the ARIMA model
+residuals <- residuals(arima_model)
+
+# Plot the ACF and PACF of the residuals
+acf(residuals)
+pacf(residuals)
+
+#plot time series data
+ts.plot(residuals,lwd=3,col="red",main='Residual Analysis')
+qqnorm(residuals)
+qqline(residuals)
+ggplot(data.frame(residuals = residuals), aes(x = 1:length(residuals), y = residuals)) +
+  geom_line() +
+  labs(x = "Observation", y = "Residuals", title = "Residuals Plot")
+
+# Plot the histogram and density of the residuals
+hist(residuals)
+plot(density(residuals))
+
+# Perform a Ljung-Box test on the residuals
+Box.test(residuals, lag = 20, type = "Ljung-Box")
+#LBQPlot(residuals, lag.max = 20, SquaredQ = FALSE)
+tsdiag(arima_model)
+```
+
+the code performs a Ljung-Box test on the residuals using the "Box.test" function to formally test for residual autocorrelation. The test statistic is compared to a chi-squared distribution with degrees of freedom equal to the number of lags specified in the test. A significant p-value (i.e., less than 0.05) indicates evidence of residual autocorrelation, which suggests that the model may be misspecified and may require further modification.
+
+In this case, I got a p-value more than 0.05 in the Ljung-Box test. It suggests that this can be a good model.
+
+**Forecast Using the best model**
+
+```{r}
+# Load the "forecast" package
+library(forecast)
+
+# Load the dataset and convert it to a time series object
+
+# Fit a SARIMA(0,1,2)(1,1,1) model to the time series
+sarima_model <- Arima(data_clean$close_last, order = c(0,1,2), seasonal = list(order = c(1,1,1), period = 12))
+
+# Generate a 50 days forecast from the SARIMA model
+forecast_data <- forecast(sarima_model, h = 50)
+
+# Plot the forecasted values
+plot(forecast_data)
+```
+
+Forecast looks good.
+
+**Fitting ARMA-GARCH model**
+
+**1. Fit ARIMA model and find out the orders of p and q as before**
+
+we found the p value 0 and q value 2 as per the lowest aic.
+
+**2. square the residuals of model in step 1, find out the orders of p and q (using ACF/PACF/EACF of squared residuals) similar to ARMA models. These new p and q of squared residuals are orders p and q of GARCH model.**
+
+```{r}
+res.arima=arima_model$residuals
+squared.res.arima=res.arima^2
+par(mfcol=c(3,1))
+plot(squared.res.arima,main='Squared Residuals')
+acf.squared=acf(squared.res.arima,main='ACF Squared
+Residuals',lag.max=12)
+pacf.squared=pacf(squared.res.arima,main='PACF Squared
+Residuals',lag.max=12)
+eacf.squared=eacf(squared.res.arima)
+```
+
+By looking at the model we can identify that there is one significant lag in both ACF and PACf and even EACF suggest that (1,1) model fits better. So GARCH(1,1) can be a option.
+
+**3. Now you have ARMA (p,q) and GARCH (p,q) model. Use package of "rugarch" in R to fit the ARMA-GARCH model together.**
+
+```{r}
+library(rugarch)
+
+ts_data <- ts(data_clean$close_last, frequency = 12)
+
+# Define the ARMA(0,2) model
+spec_arma <- ugarchspec(mean.model = list(arimaOrder = c(0,1,2)), 
+                        variance.model = list(garchOrder = c(2,2)))
+
+# Fit the ARMA(0,2) model
+fit_arma <- ugarchfit(spec_arma, data = ts_data)
+
+# Define the GARCH(2,2) model
+spec_garch <- ugarchspec(mean.model = list(arimaOrder = c(0,1,2)), 
+                         variance.model = list(garchOrder = c(2,2)))
+
+# Fit the GARCH(2,2) model
+fit_garch <- ugarchfit(spec_garch, data = ts_data)
+
+# Combine the ARMA and GARCH models
+spec_armagarch <- ugarchspec(mean.model = list(arimaOrder = c(0,1,2)), 
+                             variance.model = list(garchOrder = c(2,2)), 
+                             distribution.model = "std")
+
+# Fit the ARMA-GARCH model
+fit_armagarch <- ugarchfit(spec_armagarch, data = ts_data)
+print(fit_armagarch)
+```
+
+as per that p values of ljung-box test and p values of goodness of fit we can conclude that this is a good model.
+
+**Forecast using ARMA-GARCH model**
+
+```{r}
+library(TSA)
+library(rugarch)
+# Make a forecast for the next 12 months
+forecast_armagarch <- ugarchforecast(fit_armagarch, n.ahead = 12)
+print(forecast_armagarch)
+```
+
+This is the sigma values of forecasting using the ARMA-GARCH model.
+
+```{r}
+forecast <- plot(fit_armagarch,which='all')
+```
+
+**Simulation and Forecasting**
+
+```{r}
+library(zoo)
+setfixed(spec_armagarch) <- as.list(coef(fit_armagarch))
+coef(fit_armagarch)
+```
+
+```{r}
+plot(sigma(forecast_armagarch))
+sim <- ugarchpath(spec = spec_armagarch, m.sim = 2, n.sim = 1*252, rseed = 123)
+```
+
+Here I plots the volatility forecast produced by the forecast_armagarch object, which was obtained by calling the ugarchforecast() function on the fit_armagarch object and simulates 2 paths of length 252 (i.e., 1 year) from the ARMA-GARCH model specified in spec_armagarch, using a random seed of 123.
+
+```{r}
+plot.zoo(fitted(sim))
+plot.zoo(sigma(sim))
+```
+
+Then I plotted the fitted values of the simulated data, which are obtained by applying the model to the simulated data. After plotting fitted values I plot the sigma values of that fitted simulated data.
+
+```{r}
+p <- 9.26*apply(fitted(sim), 2, 'cumsum') + 9.26
+matplot(p, type = "l", lwd = 3)
+```
+
+It calculates the cumulative returns from the simulated data using the formula provided. Here, the constant 9.26 represents the initial value of the time series. plots the cumulative returns over time.
+
+Overall, this code fits an ARMA-GARCH model to time series data, simulates from the model, and plots the results. The resulting plots show the volatility forecast, simulated data, simulated volatility, and cumulative returns. In the last plot it is a forecast of two simulated series and the mean of two forecast can be fit to our original forecast. 
+
+# Thank you. 
